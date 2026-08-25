@@ -9,6 +9,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
@@ -134,7 +135,7 @@ func runSmokeTest(dbPath string) error {
 	// --- 步骤 3：通道 0 接收正常载荷段 ---
 	for seq := int64(1); seq <= smokeSegments; seq++ {
 		load := genLoad(rng, smokePoints)
-		if _, err := app.Tele.Ingest(trial, 0, "strain-gauge-0", seq, 12000, 650, load); err != nil {
+		if _, err := app.Tele.Ingest(context.Background(), trial, 0, "strain-gauge-0", seq, 12000, 650, load); err != nil {
 			db.Close()
 			return fmt.Errorf("ingest ch0 seq=%d: %w", seq, err)
 		}
@@ -143,14 +144,14 @@ func runSmokeTest(dbPath string) error {
 	// --- 步骤 4：通道 1 接收漂移段（应被标记为 drift） ---
 	for seq := int64(1); seq <= smokeDriftSegs; seq++ {
 		load := genDriftLoad(rng, smokePoints)
-		if _, err := app.Tele.Ingest(trial, 1, "strain-gauge-1", seq, 12000, 650, load); err != nil {
+		if _, err := app.Tele.Ingest(context.Background(), trial, 1, "strain-gauge-1", seq, 12000, 650, load); err != nil {
 			db.Close()
 			return fmt.Errorf("ingest ch1 seq=%d: %w", seq, err)
 		}
 	}
 
 	// --- 步骤 5：幂等验证：重复 seq_no 被跳过 ---
-	res, err := app.Tele.Ingest(trial, 0, "strain-gauge-0", 10, 12000, 650, genLoad(rng, smokePoints))
+	res, err := app.Tele.Ingest(context.Background(), trial, 0, "strain-gauge-0", 10, 12000, 650, genLoad(rng, smokePoints))
 	if err != nil {
 		db.Close()
 		return fmt.Errorf("re-ingest: %w", err)
@@ -161,7 +162,7 @@ func runSmokeTest(dbPath string) error {
 	}
 
 	// --- 步骤 6：缺口验证：通道 0 seq 22（跳过 21）触发 gap ---
-	gapRes, err := app.Tele.Ingest(trial, 0, "strain-gauge-0", 22, 12000, 650, genLoad(rng, smokePoints))
+	gapRes, err := app.Tele.Ingest(context.Background(), trial, 0, "strain-gauge-0", 22, 12000, 650, genLoad(rng, smokePoints))
 	if err != nil {
 		db.Close()
 		return fmt.Errorf("ingest gap: %w", err)
@@ -239,7 +240,7 @@ func runSmokeTest(dbPath string) error {
 	}
 
 	// --- 步骤 11：封存后拒绝再接收 ---
-	_, err = app.Tele.Ingest(trial, 0, "strain-gauge-0", 23, 12000, 650, genLoad(rng, smokePoints))
+	_, err = app.Tele.Ingest(context.Background(), trial, 0, "strain-gauge-0", 23, 12000, 650, genLoad(rng, smokePoints))
 	if err == nil {
 		db.Close()
 		return fmt.Errorf("expected sealed trial to reject ingest")

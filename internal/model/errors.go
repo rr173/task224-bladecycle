@@ -13,6 +13,7 @@ var (
 	ErrInvalidState     = errors.New("invalid state transition")
 	ErrSealed           = errors.New("trial is sealed and immutable")
 	ErrDuplicate        = errors.New("duplicate telemetry segment")
+	ErrCanceled         = errors.New("request canceled")
 )
 
 // DomainError 携带错误码与可读信息。
@@ -49,6 +50,11 @@ func NewInvalidState(format string, args ...interface{}) error {
 	return &DomainError{Kind: ErrInvalidState, Msg: fmt.Sprintf(format, args...)}
 }
 
+// NewCanceled 构造取消错误（客户端在写入完成前取消，数据未落库）。
+func NewCanceled(format string, args ...interface{}) error {
+	return &DomainError{Kind: ErrCanceled, Msg: fmt.Sprintf(format, args...)}
+}
+
 // IsNotFound 判断是否 NotFound。
 func IsNotFound(err error) bool {
 	return errors.Is(err, ErrNotFound)
@@ -67,6 +73,11 @@ func IsInvalidArgument(err error) bool {
 // IsInvalidState 判断是否状态机错误。
 func IsInvalidState(err error) bool {
 	return errors.Is(err, ErrInvalidState)
+}
+
+// IsCanceled 判断是否客户端取消（请求未完成，数据不应落库）。
+func IsCanceled(err error) bool {
+	return errors.Is(err, ErrCanceled)
 }
 
 // Transition 校验并返回 trial 状态机流转是否合法，返回目标状态。

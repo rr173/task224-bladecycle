@@ -24,6 +24,9 @@ func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 // writeError 将领域错误映射为 HTTP 状态码。
 func writeError(w http.ResponseWriter, err error) {
 	switch {
+	case model.IsCanceled(err):
+		// 客户端在写入完成前取消：未落库，不返回成功。
+		writeJSON(w, statusClientClosedRequest, map[string]string{"error": err.Error()})
 	case model.IsNotFound(err):
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
 	case model.IsConflict(err):
@@ -36,6 +39,10 @@ func writeError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
 }
+
+// statusClientClosedRequest 表示客户端在响应完成前关闭了连接（nginx 沿用值）。
+// 标准库未定义该状态码，用于把“取消且未落库”与 4xx 失败区分开。
+const statusClientClosedRequest = 499
 
 // parseID 解析路径参数为正整数 ID。
 func parseID(w http.ResponseWriter, r *http.Request, name string) (int64, bool) {

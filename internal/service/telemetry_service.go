@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"database/sql"
 
 	"task224-bladecycle/internal/model"
@@ -36,12 +37,20 @@ func NewTelemetryService(db *sql.DB) *TelemetryService {
 //  5. 幂等写入（UNIQUE(trial_id,channel_index,seq_no)）。
 //
 // 漂移/缺口段会被写入但状态标记为 drift/gap（保留原始数据，不参与计数）。
-func (s *TelemetryService) Ingest(trial *model.Trial, channelIndex int, sensorID string, seqNo int64, rpm, temperature float64, strain []float64) (*IngestResult, error) {
+//
+// ctx 用于感知客户端取消：在写入前若 ctx 已取消，立即返回取消错误且不落库，
+// 该段数据不会出现在遥测列表中。HTTP 层传入请求 ctx；冒烟/后台调用传入
+// context.Background() 表示不可取消。
+func (s *TelemetryService) Ingest(ctx context.Context, trial *model.Trial, channelIndex int, sensorID string, seqNo int64, rpm, temperature float64, strain []float64) (*IngestResult, error) {
 	if !model.CanWriteTrial(trial.Status) {
 		return nil, model.NewInvalidState("trial %d is sealed and immutable", trial.ID)
 	}
 	if err := telemetry.ValidateInput(trial.SampleRateHz, rpm, strain); err != nil {
 		return nil, model.NewInvalidArgument("%v", err)
+	}
+	// 客户端在解析校验阶段取消：尚未写入，直接放弃，不落库。
+	if err := ctx.Err(); err != nil {
+		return nil, model.NewCanceled("telemetry ingest canceled before write: %v", err)
 	}
 	if _, err := s.store.EnsureChannel(trial.ID, channelIndex, sensorID); err != nil {
 		return nil, err
@@ -91,6 +100,11 @@ func (s *TelemetryService) Ingest(trial *model.Trial, channelIndex int, sensorID
 		Status:       status,
 		DriftReason:  reason,
 		GapNote:      note,
+	}
+	// 落库前再次检查取消：漂移/缺口检测期间客户端取消，放弃写入，
+	// 遥测列表中不会出现这段数据。
+	if err := ctx.Err(); err != nil {
+		return nil, model.NewCanceled("telemetry ingest canceled before write: %v", err)
 	}
 	id, err := s.store.InsertSegment(seg)
 	if err == model.ErrDuplicate {

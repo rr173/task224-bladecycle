@@ -1,6 +1,10 @@
 package httpapi
 
-import "net/http"
+import (
+	"net/http"
+
+	"task224-bladecycle/internal/model"
+)
 
 type ingestTelemetryReq struct {
 	ChannelIndex int       `json:"channel_index"`
@@ -26,7 +30,12 @@ func (s *Server) ingestTelemetry(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json: " + err.Error()})
 		return
 	}
-	res, err := s.app.Tele.Ingest(trial, req.ChannelIndex, req.SensorID, req.SeqNo, req.RPM, req.Temperature, req.Strain)
+	// 客户端在解析完请求体后取消：尚未写入，直接放弃，避免落库后返回成功。
+	if err := r.Context().Err(); err != nil {
+		writeError(w, model.NewCanceled("telemetry ingest canceled before write: %v", err))
+		return
+	}
+	res, err := s.app.Tele.Ingest(r.Context(), trial, req.ChannelIndex, req.SensorID, req.SeqNo, req.RPM, req.Temperature, req.Strain)
 	if err != nil {
 		writeError(w, err)
 		return
