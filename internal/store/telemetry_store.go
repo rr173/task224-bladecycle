@@ -4,15 +4,13 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
-	"sync"
 
 	"task224-bladecycle/internal/model"
 )
 
 // TelemetryStore 管理遥测段与通道的持久化。
 type TelemetryStore struct {
-	db        *sql.DB
-	channelMu sync.Mutex
+	db *sql.DB
 }
 
 func NewTelemetryStore(db *sql.DB) *TelemetryStore { return &TelemetryStore{db: db} }
@@ -27,12 +25,6 @@ func NewTelemetryStore(db *sql.DB) *TelemetryStore { return &TelemetryStore{db: 
 // 由于 sensor_id 在生命周期内不可变，SELECT 读取的绑定值即为权威结果，不存在
 // 抢占点与校验之间的 TOCTOU 窗口。
 func (s *TelemetryStore) EnsureChannel(trialID int64, channelIndex int, sensorID string) (int64, error) {
-	// SQLite serializes writers. Keep the insert-and-read identity check as one
-	// process-local critical section so concurrent registrations do not surface
-	// SQLITE_BUSY to callers as an unrelated storage failure.
-	s.channelMu.Lock()
-	defer s.channelMu.Unlock()
-
 	if _, err := s.db.Exec(
 		`INSERT INTO channels (trial_id, channel_index, sensor_id, created_at)
 		 VALUES (?, ?, ?, ?)
