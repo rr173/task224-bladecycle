@@ -8,10 +8,10 @@ import (
 
 // CycleStore 管理疲劳循环（雨流计数结果）的持久化。
 type CycleStore struct {
-	db *sql.DB
+	db DBTX
 }
 
-func NewCycleStore(db *sql.DB) *CycleStore { return &CycleStore{db: db} }
+func NewCycleStore(db DBTX) *CycleStore { return &CycleStore{db: db} }
 
 // Insert 插入单个疲劳循环。
 func (s *CycleStore) Insert(c *model.Cycle) (int64, error) {

@@ -24,6 +24,7 @@ type AnalyzeResult struct {
 
 // CycleService 负责雨流循环计数与 Miner 损伤累计。
 type CycleService struct {
+	db     *sql.DB
 	tele   *store.TelemetryStore
 	cycles *store.CycleStore
 	damage *store.DamageStore
@@ -33,6 +34,7 @@ type CycleService struct {
 
 func NewCycleService(db *sql.DB) *CycleService {
 	return &CycleService{
+		db:     db,
 		tele:   store.NewTelemetryStore(db),
 		cycles: store.NewCycleStore(db),
 		damage: store.NewDamageStore(db),
@@ -46,6 +48,9 @@ func NewCycleService(db *sql.DB) *CycleService {
 // 前置：试验处于 analyzing（由 FinishAcquisition 推进）。
 // 流程：遍历每个通道的有效遥测段 → 拼接峰谷序列 → 雨流计数 → 写循环 →
 // 按材料 S-N 曲线累计 Miner 损伤 → 写损伤记录。
+//
+// 清理旧结果与写入新结果同处一个事务：若重算在写入过程中失败，
+// 整个事务回滚（含旧结果清理），从而保留上一轮完整分析结果。
 func (s *CycleService) Analyze(trial *model.Trial) (*AnalyzeResult, error) {
 	if trial.Status != model.TrialAnalyzing {
 		return nil, model.NewInvalidState("trial %d must be analyzing, got %s", trial.ID, trial.Status)
@@ -64,11 +69,21 @@ func (s *CycleService) Analyze(trial *model.Trial) (*AnalyzeResult, error) {
 		MeanStressMethod:    mat.MeanStressMethod,
 	}
 
-	// 清理旧结果，保证重算幂等。
-	if err := s.cycles.DeleteByTrial(trial.ID); err != nil {
+	tx, err := s.db.Begin()
+	if err != nil {
 		return nil, err
 	}
-	if err := s.damage.DeleteByTrial(trial.ID); err != nil {
+	// 任何中途失败都回滚事务，避免清空上一轮完整结果。
+	defer func() { _ = tx.Rollback() }()
+
+	cyclesTx := store.NewCycleStore(tx)
+	damageTx := store.NewDamageStore(tx)
+
+	// 清理旧结果，保证重算幂等（随事务提交生效）。
+	if err := cyclesTx.DeleteByTrial(trial.ID); err != nil {
+		return nil, err
+	}
+	if err := damageTx.DeleteByTrial(trial.ID); err != nil {
 		return nil, err
 	}
 
@@ -101,7 +116,7 @@ func (s *CycleService) Analyze(trial *model.Trial) (*AnalyzeResult, error) {
 				Status:           model.CycleCounted,
 				SourceSegmentIDs: srcIDs,
 			}
-			if _, err := s.cycles.Insert(cyc); err != nil {
+			if _, err := cyclesTx.Insert(cyc); err != nil {
 				return nil, err
 			}
 		}
@@ -110,7 +125,7 @@ func (s *CycleService) Analyze(trial *model.Trial) (*AnalyzeResult, error) {
 	}
 
 	// 汇总全部循环计算损伤。
-	allCycles, err := s.cycles.ListByTrial(trial.ID)
+	allCycles, err := cyclesTx.ListByTrial(trial.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -138,7 +153,10 @@ func (s *CycleService) Analyze(trial *model.Trial) (*AnalyzeResult, error) {
 		MaxAmplitude:    res.MaxAmplitude,
 		ThresholdMet:    res.ThresholdMet,
 	}
-	if _, err := s.damage.Insert(rec); err != nil {
+	if _, err := damageTx.Insert(rec); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
 	return res, nil

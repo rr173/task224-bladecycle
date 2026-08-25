@@ -1,17 +1,15 @@
 package store
 
 import (
-	"database/sql"
-
 	"task224-bladecycle/internal/model"
 )
 
 // DamageStore 管理 Miner 损伤累计记录的持久化。
 type DamageStore struct {
-	db *sql.DB
+	db DBTX
 }
 
-func NewDamageStore(db *sql.DB) *DamageStore { return &DamageStore{db: db} }
+func NewDamageStore(db DBTX) *DamageStore { return &DamageStore{db: db} }
 
 // Insert 写入一条损伤累计记录。
 func (s *DamageStore) Insert(r *model.DamageRecord) (int64, error) {
