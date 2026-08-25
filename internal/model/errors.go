@@ -92,6 +92,13 @@ func CanWriteTrial(s TrialStatus) bool {
 	return s != TrialSealed
 }
 
+// AnalysisComplete 判断试验分析是否已完成。
+// 仅当损伤结论已经复核（confirmed）或试验已封存（sealed）时才算完成；
+// 处于 analyzing 及更早状态的试验即便已有损伤记录，也不得发布寿命快照。
+func AnalysisComplete(s TrialStatus) bool {
+	return s == TrialConfirmed || s == TrialSealed
+}
+
 // ValidCycleTransition 判断 cycle 状态机流转合法性。
 func ValidCycleTransition(from CycleStatus, to CycleStatus) bool {
 	allowed := map[CycleStatus][]CycleStatus{

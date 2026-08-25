@@ -10,22 +10,35 @@ import (
 
 // SnapshotService 管理寿命快照（冻结损伤评估结论）。
 type SnapshotService struct {
-	snaps *store.SnapshotStore
+	snaps  *store.SnapshotStore
 	damage *store.DamageStore
+	trials *store.TrialStore
 }
 
 func NewSnapshotService(db *sql.DB) *SnapshotService {
 	return &SnapshotService{
-		snaps: store.NewSnapshotStore(db),
+		snaps:  store.NewSnapshotStore(db),
 		damage: store.NewDamageStore(db),
+		trials: store.NewTrialStore(db),
 	}
 }
 
 // Publish 基于最新损伤记录发布一条寿命快照。
 //
-// 规则：快照版本递增；发布新快照会将已发布旧快照标记为 superseded；
+// 规则：仅当试验分析已经完成（confirmed 或 sealed）时才可发布；
+// 快照版本递增；发布新快照会将已发布旧快照标记为 superseded；
 // 冻结时记录总损伤、总循环、剩余寿命百分比与是否超阈值。
 func (s *SnapshotService) Publish(trialID int64) (*model.Snapshot, error) {
+	trial, err := s.trials.Get(trialID)
+	if err == sql.ErrNoRows {
+		return nil, model.NewNotFound("trial %d not found", trialID)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if !model.AnalysisComplete(trial.Status) {
+		return nil, model.NewInvalidState("trial %d analysis not complete (status %s); cannot publish snapshot", trialID, trial.Status)
+	}
 	rec, err := s.damage.LatestByTrial(trialID)
 	if err == sql.ErrNoRows {
 		return nil, model.NewInvalidState("trial %d has no damage record to snapshot", trialID)
