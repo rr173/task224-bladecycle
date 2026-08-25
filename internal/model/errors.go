@@ -87,9 +87,15 @@ func Transition(from TrialStatus, to TrialStatus) error {
 	return NewInvalidState("trial cannot transition from %s to %s", from, to)
 }
 
-// CanWriteTrial 判断 trial 是否仍可写入（未封存）。
+// CanAcceptTelemetry 判断 trial 是否仍处于采集阶段，可接收新遥测。
+// 仅 running 态可写入；ready 尚未开始、analyzing 及之后采集已结束。
+func CanAcceptTelemetry(s TrialStatus) bool {
+	return s == TrialRunning
+}
+
+// CanWriteTrial 判断 trial 是否仍可写入（向后兼容别名，仅运行中可写入）。
 func CanWriteTrial(s TrialStatus) bool {
-	return s != TrialSealed
+	return CanAcceptTelemetry(s)
 }
 
 // ValidCycleTransition 判断 cycle 状态机流转合法性。

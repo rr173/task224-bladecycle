@@ -38,7 +38,7 @@ func NewTelemetryService(db *sql.DB) *TelemetryService {
 // 漂移/缺口段会被写入但状态标记为 drift/gap（保留原始数据，不参与计数）。
 func (s *TelemetryService) Ingest(trial *model.Trial, channelIndex int, sensorID string, seqNo int64, rpm, temperature float64, strain []float64) (*IngestResult, error) {
 	if !model.CanWriteTrial(trial.Status) {
-		return nil, model.NewInvalidState("trial %d is sealed and immutable", trial.ID)
+		return nil, model.NewInvalidState("trial %d acquisition ended (status=%s), cannot accept telemetry", trial.ID, trial.Status)
 	}
 	if err := telemetry.ValidateInput(trial.SampleRateHz, rpm, strain); err != nil {
 		return nil, model.NewInvalidArgument("%v", err)

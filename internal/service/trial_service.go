@@ -108,14 +108,15 @@ func (s *TrialService) Seal(id int64) (*model.Trial, error) {
 	return s.Get(id)
 }
 
-// EnsureWritable 校验试验未封存，可继续写入。
+// EnsureWritable 校验试验仍处于采集阶段（running），可继续接收遥测。
+// 采集一旦结束（进入 analyzing 及之后）即不可再写入。
 func (s *TrialService) EnsureWritable(id int64) (*model.Trial, error) {
 	t, err := s.Get(id)
 	if err != nil {
 		return nil, err
 	}
 	if !model.CanWriteTrial(t.Status) {
-		return nil, model.NewInvalidState("trial %d is sealed and immutable", id)
+		return nil, model.NewInvalidState("trial %d acquisition ended (status=%s), cannot accept telemetry", id, t.Status)
 	}
 	return t, nil
 }
