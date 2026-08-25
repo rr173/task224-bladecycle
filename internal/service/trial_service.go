@@ -10,13 +10,20 @@ import (
 // TrialService 管理试验架次生命周期。
 type TrialService struct {
 	store *store.TrialStore
+	mats  *store.MaterialStore
 }
 
 func NewTrialService(db *sql.DB) *TrialService {
-	return &TrialService{store: store.NewTrialStore(db)}
+	return &TrialService{
+		store: store.NewTrialStore(db),
+		mats:  store.NewMaterialStore(db),
+	}
 }
 
 // Create 创建试验架次（初始 ready）。
+//
+// 在落库前校验材料批次存在，避免留下无有效材料引用的试验记录：
+// 不存在的批次号在创建阶段即被拒绝，数据库中不写入该条记录。
 func (s *TrialService) Create(name, engineModel string, materialBatchID int64, sampleRateHz float64) (*model.Trial, error) {
 	if name == "" {
 		return nil, model.NewInvalidArgument("trial name must not be empty")
@@ -26,6 +33,11 @@ func (s *TrialService) Create(name, engineModel string, materialBatchID int64, s
 	}
 	if sampleRateHz <= 0 {
 		return nil, model.NewInvalidArgument("sample rate must be positive")
+	}
+	if _, err := s.mats.Get(materialBatchID); err == sql.ErrNoRows {
+		return nil, model.NewNotFound("material batch %d not found", materialBatchID)
+	} else if err != nil {
+		return nil, err
 	}
 	id, err := s.store.Insert(name, engineModel, materialBatchID, sampleRateHz)
 	if err != nil {
