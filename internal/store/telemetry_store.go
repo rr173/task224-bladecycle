@@ -15,27 +15,39 @@ type TelemetryStore struct {
 
 func NewTelemetryStore(db *sql.DB) *TelemetryStore { return &TelemetryStore{db: db} }
 
-// EnsureChannel 幂等注册通道（存在则返回 ID）。
+// EnsureChannel 幂等注册通道并强制传感器身份绑定。
+//
+// 同一 (trial_id, channel_index) 在首次注册时绑定一个 sensor_id，此后任何使用
+// 不同 sensor_id 的请求都必须得到冲突结果，且不能写入遥测数据。为消除“先
+// SELECT 再 INSERT”的注册竞争，这里以 `INSERT ... ON CONFLICT DO NOTHING` 作为
+// 单一原子抢占点：抢到插入的请求绑定其 sensor_id；其余请求落入随后的 SELECT
+// 读取已绑定值，仅当与本次请求的 sensor_id 一致时才放行，否则返回 Conflict。
+// 由于 sensor_id 在生命周期内不可变，SELECT 读取的绑定值即为权威结果，不存在
+// 抢占点与校验之间的 TOCTOU 窗口。
 func (s *TelemetryStore) EnsureChannel(trialID int64, channelIndex int, sensorID string) (int64, error) {
-	var id int64
-	err := s.db.QueryRow(
-		`SELECT id FROM channels WHERE trial_id = ? AND channel_index = ?`,
-		trialID, channelIndex,
-	).Scan(&id)
-	if err == nil {
-		return id, nil
-	}
-	if err != sql.ErrNoRows {
-		return 0, err
-	}
-	res, err := s.db.Exec(
-		`INSERT INTO channels (trial_id, channel_index, sensor_id, created_at) VALUES (?, ?, ?, ?)`,
+	if _, err := s.db.Exec(
+		`INSERT INTO channels (trial_id, channel_index, sensor_id, created_at)
+		 VALUES (?, ?, ?, ?)
+		 ON CONFLICT(trial_id, channel_index) DO NOTHING`,
 		trialID, channelIndex, sensorID, nowStr(),
-	)
-	if err != nil {
+	); err != nil {
 		return 0, err
 	}
-	return res.LastInsertId()
+	var (
+		id            int64
+		boundSensorID string
+	)
+	if err := s.db.QueryRow(
+		`SELECT id, sensor_id FROM channels WHERE trial_id = ? AND channel_index = ?`,
+		trialID, channelIndex,
+	).Scan(&id, &boundSensorID); err != nil {
+		return 0, err
+	}
+	if boundSensorID != sensorID {
+		return 0, model.NewConflict("channel %d on trial %d is bound to sensor %q, received %q",
+			channelIndex, trialID, boundSensorID, sensorID)
+	}
+	return id, nil
 }
 
 // InsertSegment 插入遥测段。UNIQUE(trial_id, channel_index, seq_no) 保证幂等，
