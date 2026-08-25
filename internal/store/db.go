@@ -9,13 +9,48 @@ import (
 	_ "modernc.org/sqlite" // 纯 Go SQLite 驱动，CGO 无关，离线可构建
 )
 
+// dsn 将原始路径/URI 转为带连接级配置的 DSN。
+//
+// 通过驱动查询参数对连接池中的每条连接统一配置，避免 PRAGMA 仅作用于单条
+// 连接、其余连接无超时配置的隐患：
+//   - _txlock=immediate：写事务在 BEGIN 时即获取 RESERVED 锁，把对同一试验
+//     的并发发布请求串行化（先拿到锁的事务完整执行取版本号→替代旧快照→写入，
+//     其余事务在 busy_timeout 内排队），消除交错执行导致的版本号竞争与重复版本；
+//   - _pragma=busy_timeout(...)：SQLITE_BUSY 时由 SQLite 内核在超时窗口内自动
+//     重试，配合上述串行化让并发发布请求相互等待而非直接失败。
+//
+// file: URI 自带查询串时原样交由驱动处理；其余路径追加参数（驱动仅在 DSN 含
+// '?' 时解析查询参数，故对纯文件路径安全）。
+func dsn(path string) string {
+	if path == "" {
+		path = ":memory:"
+	}
+	if len(path) >= 5 && path[:5] == "file:" {
+		return path
+	}
+	sep := "?"
+	if containsRune(path, '?') {
+		sep = "&"
+	}
+	return path + sep + "_txlock=immediate&_pragma=busy_timeout(5000)"
+}
+
+func containsRune(s string, r rune) bool {
+	for _, c := range s {
+		if c == r {
+			return true
+		}
+	}
+	return false
+}
+
 // Open 打开（必要时创建）SQLite 数据库并执行建表迁移。
 func Open(path string) (*sql.DB, error) {
-	db, err := sql.Open("sqlite", path)
+	db, err := sql.Open("sqlite", dsn(path))
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
-	// 单写者 + 外键 + 事务并发稳定。
+	// WAL 与外键需在迁移前设置；busy_timeout 已经由 DSN 对每条连接统一配置。
 	if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("enable wal: %w", err)
@@ -23,10 +58,6 @@ func Open(path string) (*sql.DB, error) {
 	if _, err := db.Exec("PRAGMA foreign_keys=ON"); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("enable foreign keys: %w", err)
-	}
-	if _, err := db.Exec("PRAGMA busy_timeout=5000"); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("set busy timeout: %w", err)
 	}
 	if err := migrate(db); err != nil {
 		db.Close()

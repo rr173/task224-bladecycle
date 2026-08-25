@@ -11,13 +11,11 @@ import (
 // SnapshotService 管理寿命快照（冻结损伤评估结论）。
 type SnapshotService struct {
 	snaps *store.SnapshotStore
-	damage *store.DamageStore
 }
 
 func NewSnapshotService(db *sql.DB) *SnapshotService {
 	return &SnapshotService{
 		snaps: store.NewSnapshotStore(db),
-		damage: store.NewDamageStore(db),
 	}
 }
 
@@ -25,37 +23,23 @@ func NewSnapshotService(db *sql.DB) *SnapshotService {
 //
 // 规则：快照版本递增；发布新快照会将已发布旧快照标记为 superseded；
 // 冻结时记录总损伤、总循环、剩余寿命百分比与是否超阈值。
+//
+// 并发安全：读损伤、分配版本号、替代旧快照、写入新快照在 store 层的单个
+// 事务内原子完成（_txlock=immediate 串行化写事务），避免同一试验短时间多次
+// 发布请求交错导致的发布失败或重复版本号。
 func (s *SnapshotService) Publish(trialID int64) (*model.Snapshot, error) {
-	rec, err := s.damage.LatestByTrial(trialID)
+	snap, err := s.snaps.Publish(trialID, func(rec *model.DamageRecord) *model.Snapshot {
+		return &model.Snapshot{
+			TotalDamage:       rec.TotalDamage,
+			TotalCycles:       rec.TotalCycles,
+			RemainingLifePct:  damage.RemainingLife(rec.TotalDamage),
+			ThresholdExceeded: rec.ThresholdMet,
+		}
+	})
 	if err == sql.ErrNoRows {
 		return nil, model.NewInvalidState("trial %d has no damage record to snapshot", trialID)
 	}
-	if err != nil {
-		return nil, err
-	}
-	version, err := s.snaps.NextVersion(trialID)
-	if err != nil {
-		return nil, err
-	}
-	snap := &model.Snapshot{
-		TrialID:           trialID,
-		Version:           version,
-		Status:            model.SnapshotPublished,
-		TotalDamage:       rec.TotalDamage,
-		TotalCycles:       rec.TotalCycles,
-		RemainingLifePct:  damage.RemainingLife(rec.TotalDamage),
-		ThresholdExceeded: rec.ThresholdMet,
-	}
-	// 旧已发布快照标记为替代。
-	if err := s.snaps.SupersedePublished(trialID); err != nil {
-		return nil, err
-	}
-	id, err := s.snaps.Insert(snap)
-	if err != nil {
-		return nil, err
-	}
-	snap.ID = id
-	return snap, nil
+	return snap, err
 }
 
 // Get 按 ID 查询快照。
